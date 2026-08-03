@@ -1,9 +1,19 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, Dict
 import uuid
 
 app = FastAPI(title="API Agent IA Financier", version="1.0")
+
+# LE PASS VIP (CORS) : Autorise ton site web à parler au serveur
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # Autorise tout le monde (localhost et Vercel plus tard)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class InvoiceTextRequest(BaseModel):
     text_content: str = Field(..., description="Texte brut de la facture")
@@ -29,7 +39,8 @@ async def extract_invoice(request: InvoiceTextRequest):
     }
     
     return {
-        "message": "Extraction réussie, en attente de validation DAF.",
+        "message": "Extraction réussie.",
         "document_id": document_id,
         "data": extracted_json
     }
+
