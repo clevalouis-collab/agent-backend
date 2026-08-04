@@ -40,7 +40,6 @@ async def extract_pdf(file: UploadFile = File(...)):
         if not GEMINI_API_KEY:
             raise HTTPException(status_code=500, detail="Clé API non configurée.")
 
-        # --- NOUVEAU PROMPT DAF ---
         prompt = f"""
         Tu es un assistant comptable expert pour les DAF. Extraire les infos en JSON STRICT.
         Ne réponds RIEN d'autre que l'objet JSON. Si une info est introuvable, mets "N/A" (ou 0.00 pour les montants).
