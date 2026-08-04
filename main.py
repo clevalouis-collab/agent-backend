@@ -6,7 +6,7 @@ import json
 from pypdf import PdfReader
 import requests
 
-app = FastAPI(title="API Agent IA Financier - Auto-Pilote Esquive", version="9.0")
+app = FastAPI(title="API Agent IA - Le Terminator", version="10.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,75 +36,80 @@ async def extract_pdf(file: UploadFile = File(...)):
                 extracted_text += text + "\n"
         
         if not extracted_text.strip():
-            raise HTTPException(status_code=400, detail="Le PDF semble être un scan sans texte lisible.")
+            raise HTTPException(status_code=400, detail="Le PDF semble être un scan.")
 
         if not GEMINI_API_KEY:
             raise HTTPException(status_code=500, detail="Clé API non configurée.")
 
-        # 2. AUTO-DISCOVERY : On liste les modèles
-        models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-        models_response = requests.get(models_url)
-        
-        if models_response.status_code != 200:
-            raise Exception(f"Impossible de lister tes modèles Google : {models_response.text}")
-            
-        models_data = models_response.json().get("models", [])
-        
-        # L'ESQUIVE EST ICI : On ignore le modèle "2.5-flash" qui est buggé pour les nouveaux comptes
-        target_model = None
-        for m in models_data:
-            name = m.get("name", "")
-            methods = m.get("supportedGenerationMethods", [])
-            if "gemini" in name and "generateContent" in methods and "2.5-flash" not in name:
-                target_model = name
-                break
-        
-        if not target_model:
-            raise Exception("Aucun modèle Gemini compatible trouvé en dehors du modèle bloqué.")
-
-        print(f"✅ Modèle trouvé et sélectionné automatiquement : {target_model}")
-
         prompt = f"""
-        Tu es un assistant comptable expert pour les DAF. Voici le texte extrait d'une facture.
-        Ton travail est de trouver les informations suivantes et de me les renvoyer STRICTEMENT au format JSON.
-        Ne réponds rien d'autre que l'objet JSON.
+        Tu es un assistant comptable expert pour les DAF. Extraire les infos en JSON STRICT.
+        Ne réponds RIEN d'autre que l'objet JSON.
         
         Format attendu :
         {{
             "fournisseur": "Nom de l'entreprise",
             "montant_ttc": 0.00,
             "tva": 0.00,
-            "iban": "Le numéro IBAN, ou N/A s'il n'y en a pas"
+            "iban": "Numéro IBAN ou N/A"
         }}
         
-        Voici le texte de la facture :
+        Texte de la facture :
         {extracted_text}
         """
+
+        # 2. LA BOUCLE TERMINATOR (Force Brute)
+        models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+        models_response = requests.get(models_url)
         
-        # 3. L'attaque avec le bon modèle
-        url = f"https://generativelanguage.googleapis.com/v1beta/{target_model}:generateContent?key={GEMINI_API_KEY}"
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}]
-        }
-        
-        api_response = requests.post(url, json=payload)
-        
-        if api_response.status_code != 200:
-            raise Exception(f"Refus de Google ({api_response.status_code}) : {api_response.text}")
+        if models_response.status_code != 200:
+            raise Exception("Impossible de lire la liste des modèles Google.")
             
-        result_json = api_response.json()
-        response_text = result_json['candidates'][0]['content']['parts'][0]['text'].strip()
+        models_data = models_response.json().get("models", [])
         
-        # 4. Nettoyage et renvoi du JSON
-        if response_text.startswith("```json"):
-            response_text = response_text.replace("```json", "").replace("```", "").strip()
-        elif response_text.startswith("```"):
-            response_text = response_text.replace("```", "").strip()
-        
-        extracted_data = json.loads(response_text)
+        extracted_data = None
+        target_model_used = None
+        last_error = ""
+
+        # On teste tous les modèles un par un !
+        for m in models_data:
+            name = m.get("name", "")
+            methods = m.get("supportedGenerationMethods", [])
+            
+            if "gemini" in name and "generateContent" in methods:
+                print(f"⏳ Tentative avec {name}...")
+                
+                url = f"https://generativelanguage.googleapis.com/v1beta/{name}:generateContent?key={GEMINI_API_KEY}"
+                payload = { "contents": [{"parts": [{"text": prompt}]}] }
+                
+                api_response = requests.post(url, json=payload)
+                
+                # Si le modèle accepte, on traite la donnée et on ARRETE LA BOUCLE !
+                if api_response.status_code == 200:
+                    result_json = api_response.json()
+                    response_text = result_json['candidates'][0]['content']['parts'][0]['text'].strip()
+                    
+                    if response_text.startswith("```json"):
+                        response_text = response_text.replace("```json", "").replace("```", "").strip()
+                    elif response_text.startswith("```"):
+                        response_text = response_text.replace("```", "").strip()
+                    
+                    try:
+                        extracted_data = json.loads(response_text)
+                        target_model_used = name
+                        print(f"✅ VICTOIRE avec {name} !")
+                        break
+                    except json.JSONDecodeError:
+                        print(f"⚠️ {name} a mal formaté le JSON. On passe au suivant.")
+                        continue
+                else:
+                    print(f"❌ {name} a refusé (Erreur {api_response.status_code}).")
+                    last_error = str(api_response.status_code)
+
+        if not extracted_data:
+            raise Exception(f"Tous les modèles ont échoué. Dernière erreur : {last_error}")
 
         return {
-            "message": f"Analyse IA ({target_model}) terminée avec succès.",
+            "message": f"Analyse IA ({target_model_used}) réussie.",
             "filename": file.filename,
             "data": extracted_data
         }
