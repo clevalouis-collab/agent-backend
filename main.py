@@ -1,9 +1,12 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import io
+import os
+import json
 from pypdf import PdfReader
+import google.generativeai as genai
 
-app = FastAPI(title="API Agent IA Financier - PDF Reader", version="1.2")
+app = FastAPI(title="API Agent IA Financier - Cerveau Gemini", version="2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -13,12 +16,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Récupération de la clé API depuis le coffre Render
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+
 @app.post("/extract-pdf")
 async def extract_pdf(file: UploadFile = File(...)):
-    if not file.filename.lower().endswith(('.pdf', '.png', '.jpg', '.jpeg')):
-        raise HTTPException(status_code=400, detail="Format de fichier non supporté.")
+    if not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Merci d'envoyer un vrai fichier PDF.")
     
     try:
+        # 1. Lecture du PDF
         contents = await file.read()
         pdf_file = io.BytesIO(contents)
         reader = PdfReader(pdf_file)
@@ -30,21 +39,46 @@ async def extract_pdf(file: UploadFile = File(...)):
                 extracted_text += text + "\n"
         
         if not extracted_text.strip():
-            extracted_text = "Texte illisible ou document scanné."
+            raise HTTPException(status_code=400, detail="Le PDF semble être une image ou un scan sans texte lisible.")
 
-        simulated_extracted_data = {
-            "fournisseur": f"Fournisseur détecté pour {file.filename}",
-            "montant_ttc": 1250.00,
-            "tva": 250.00,
-            "iban": "FR76 3000 3000 3000 3000 300"
-        }
+        # 2. Appel à l'IA Gemini
+        if not GEMINI_API_KEY:
+            raise HTTPException(status_code=500, detail="Clé API non configurée sur Render.")
+
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = f"""
+        Tu es un assistant comptable expert pour les DAF. Voici le texte extrait d'une facture.
+        Ton travail est de trouver les informations suivantes et de me les renvoyer STRICTEMENT au format JSON.
+        Ne réponds rien d'autre que l'objet JSON.
+        
+        Format attendu :
+        {{
+            "fournisseur": "Nom de l'entreprise",
+            "montant_ttc": 0.00,
+            "tva": 0.00,
+            "iban": "Le numéro IBAN, ou N/A s'il n'y en a pas"
+        }}
+        
+        Voici le texte de la facture :
+        {extracted_text}
+        """
+        
+        response = model.generate_content(prompt)
+        
+        # 3. Nettoyage et renvoi du JSON
+        response_text = response.text.strip()
+        if response_text.startswith("```json"):
+            response_text = response_text.replace("```json", "").replace("```", "").strip()
+        
+        extracted_data = json.loads(response_text)
 
         return {
-            "message": "PDF lu et analysé avec succès par l'agent.",
+            "message": "Analyse IA terminée avec succès.",
             "filename": file.filename,
-            "raw_text_preview": extracted_text[:200],
-            "data": simulated_extracted_data
+            "data": extracted_data
         }
         
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="L'IA n'a pas pu structurer les données correctement.")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur lors de la lecture du PDF : {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur du serveur IA : {str(e)}")
