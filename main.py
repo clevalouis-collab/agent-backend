@@ -4,9 +4,9 @@ import io
 import os
 import json
 from pypdf import PdfReader
-import google.generativeai as genai
+from google import genai # <--- La nouvelle bibliothèque
 
-app = FastAPI(title="API Agent IA Financier - Cerveau Gemini", version="2.0")
+app = FastAPI(title="API Agent IA Financier - Cerveau Gemini V3", version="3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,10 +16,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Récupération de la clé API depuis le coffre Render
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
 
 @app.post("/extract-pdf")
 async def extract_pdf(file: UploadFile = File(...)):
@@ -39,33 +36,38 @@ async def extract_pdf(file: UploadFile = File(...)):
                 extracted_text += text + "\n"
         
         if not extracted_text.strip():
-            raise HTTPException(status_code=400, detail="Le PDF semble être une image ou un scan sans texte lisible.")
+            raise HTTPException(status_code=400, detail="Le PDF semble être un scan.")
 
-        # 2. Appel à l'IA Gemini
+        # 2. IA Google (Nouvelle méthode)
         if not GEMINI_API_KEY:
-            raise HTTPException(status_code=500, detail="Clé API non configurée sur Render.")
+            print("🚨 ERREUR : La clé GEMINI_API_KEY n'est pas trouvée dans Render !")
+            raise HTTPException(status_code=500, detail="Clé API manquante.")
 
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"""
-        Tu es un assistant comptable expert pour les DAF. Voici le texte extrait d'une facture.
-        Ton travail est de trouver les informations suivantes et de me les renvoyer STRICTEMENT au format JSON.
-        Ne réponds rien d'autre que l'objet JSON.
+        client = genai.Client(api_key=GEMINI_API_KEY)
         
-        Format attendu :
+        prompt = f"""
+        Tu es un expert comptable pour DAF. Extrais les infos de cette facture.
+        Renvoie UNIQUEMENT un objet JSON valide, rien d'autre.
+        
+        Format :
         {{
             "fournisseur": "Nom de l'entreprise",
             "montant_ttc": 0.00,
             "tva": 0.00,
-            "iban": "Le numéro IBAN, ou N/A s'il n'y en a pas"
+            "iban": "Numéro IBAN ou N/A"
         }}
         
-        Voici le texte de la facture :
+        Texte :
         {extracted_text}
         """
         
-        response = model.generate_content(prompt)
+        # Appel à la nouvelle API
+        response = client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt,
+        )
         
-        # 3. Nettoyage et renvoi du JSON
+        # 3. Nettoyage
         response_text = response.text.strip()
         if response_text.startswith("```json"):
             response_text = response_text.replace("```json", "").replace("```", "").strip()
@@ -78,7 +80,7 @@ async def extract_pdf(file: UploadFile = File(...)):
             "data": extracted_data
         }
         
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="L'IA n'a pas pu structurer les données correctement.")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur du serveur IA : {str(e)}")
+        # L'ALARME ROUGE : s'affichera dans les logs Render
+        print(f"🚨 ERREUR CRASH IA : {str(e)}") 
+        raise HTTPException(status_code=500, detail="Erreur interne du serveur IA.")
