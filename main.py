@@ -4,9 +4,9 @@ import io
 import os
 import json
 from pypdf import PdfReader
-import google.generativeai as genai
+import requests
 
-app = FastAPI(title="API Agent IA Financier - Cerveau Stable", version="5.0")
+app = FastAPI(title="API Agent IA Financier - Bypass Direct", version="6.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,8 +17,6 @@ app.add_middleware(
 )
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
 
 @app.post("/extract-pdf")
 async def extract_pdf(file: UploadFile = File(...)):
@@ -40,13 +38,10 @@ async def extract_pdf(file: UploadFile = File(...)):
         if not extracted_text.strip():
             raise HTTPException(status_code=400, detail="Le PDF semble être un scan sans texte lisible.")
 
-        # 2. IA Google (Le modèle universel 'gemini-pro')
+        # 2. BYPASS : Appel direct à l'URL de Google (Sans utiliser leur bibliothèque buggée)
         if not GEMINI_API_KEY:
             raise HTTPException(status_code=500, detail="Clé API non configurée.")
 
-        # CHANGEMENT ICI : On utilise le modèle le plus stable
-        model = genai.GenerativeModel('gemini-pro') 
-        
         prompt = f"""
         Tu es un assistant comptable expert pour les DAF. Voici le texte extrait d'une facture.
         Ton travail est de trouver les informations suivantes et de me les renvoyer STRICTEMENT au format JSON.
@@ -64,12 +59,26 @@ async def extract_pdf(file: UploadFile = File(...)):
         {extracted_text}
         """
         
-        response = model.generate_content(prompt)
+        # L'URL d'attaque directe
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}]
+        }
+        
+        # On frappe à la porte en HTTP pur
+        api_response = requests.post(url, json=payload)
+        
+        if api_response.status_code != 200:
+            raise Exception(f"Refus de Google : {api_response.text}")
+            
+        result_json = api_response.json()
+        response_text = result_json['candidates'][0]['content']['parts'][0]['text'].strip()
         
         # 3. Nettoyage et renvoi du JSON
-        response_text = response.text.strip()
         if response_text.startswith("```json"):
             response_text = response_text.replace("```json", "").replace("```", "").strip()
+        elif response_text.startswith("```"):
+            response_text = response_text.replace("```", "").strip()
         
         extracted_data = json.loads(response_text)
 
