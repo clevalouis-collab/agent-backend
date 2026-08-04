@@ -1,46 +1,50 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import Optional, Dict
-import uuid
+import io
+from pypdf import PdfReader
 
-app = FastAPI(title="API Agent IA Financier", version="1.0")
+app = FastAPI(title="API Agent IA Financier - PDF Reader", version="1.2")
 
-# LE PASS VIP (CORS) : Autorise ton site web à parler au serveur
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Autorise tout le monde (localhost et Vercel plus tard)
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-class InvoiceTextRequest(BaseModel):
-    text_content: str = Field(..., description="Texte brut de la facture")
-
-db_documents: Dict[str, dict] = {}
-
-def mock_llm_extraction(text: str):
-    return {
-        "fournisseur": "TechCorp SAS",
-        "montant_ttc": 1200.00,
-        "tva": 200.00,
-        "iban": "FR76 3000 3000 3000 3000 3000 300"
-    }
-
-@app.post("/extract")
-async def extract_invoice(request: InvoiceTextRequest):
-    extracted_json = mock_llm_extraction(request.text_content)
-    document_id = str(uuid.uuid4())
+@app.post("/extract-pdf")
+async def extract_pdf(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(('.pdf', '.png', '.jpg', '.jpeg')):
+        raise HTTPException(status_code=400, detail="Format de fichier non supporté.")
     
-    db_documents[document_id] = {
-        "status": "pending_validation",
-        "data": extracted_json
-    }
-    
-    return {
-        "message": "Extraction réussie.",
-        "document_id": document_id,
-        "data": extracted_json
-    }
+    try:
+        contents = await file.read()
+        pdf_file = io.BytesIO(contents)
+        reader = PdfReader(pdf_file)
+        
+        extracted_text = ""
+        for page in reader.pages:
+            text = page.extract_text()
+            if text:
+                extracted_text += text + "\n"
+        
+        if not extracted_text.strip():
+            extracted_text = "Texte illisible ou document scanné."
 
+        simulated_extracted_data = {
+            "fournisseur": f"Fournisseur détecté pour {file.filename}",
+            "montant_ttc": 1250.00,
+            "tva": 250.00,
+            "iban": "FR76 3000 3000 3000 3000 300"
+        }
+
+        return {
+            "message": "PDF lu et analysé avec succès par l'agent.",
+            "filename": file.filename,
+            "raw_text_preview": extracted_text[:200],
+            "data": simulated_extracted_data
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la lecture du PDF : {str(e)}")
