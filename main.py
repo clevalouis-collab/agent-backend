@@ -6,7 +6,7 @@ import json
 from pypdf import PdfReader
 import requests
 
-app = FastAPI(title="API Agent IA Financier - Ultra Bypass", version="7.0")
+app = FastAPI(title="API Agent IA Financier - Auto-Pilote", version="8.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,7 +16,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# LE CORRECTIF MAGIQUE EST ICI : .strip() écrase les espaces invisibles !
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
 @app.post("/extract-pdf")
@@ -42,6 +41,29 @@ async def extract_pdf(file: UploadFile = File(...)):
         if not GEMINI_API_KEY:
             raise HTTPException(status_code=500, detail="Clé API non configurée.")
 
+        # 2. AUTO-DISCOVERY : On demande à Google quel modèle utiliser !
+        models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+        models_response = requests.get(models_url)
+        
+        if models_response.status_code != 200:
+            raise Exception(f"Impossible de lister tes modèles Google : {models_response.text}")
+            
+        models_data = models_response.json().get("models", [])
+        
+        # On cherche le premier modèle Gemini autorisé à lire du texte sur ton compte
+        target_model = None
+        for m in models_data:
+            name = m.get("name", "")
+            methods = m.get("supportedGenerationMethods", [])
+            if "gemini" in name and "generateContent" in methods:
+                target_model = name
+                break
+        
+        if not target_model:
+            raise Exception("Aucun modèle Gemini compatible trouvé sur ton compte.")
+
+        print(f"✅ Modèle trouvé et sélectionné automatiquement : {target_model}")
+
         prompt = f"""
         Tu es un assistant comptable expert pour les DAF. Voici le texte extrait d'une facture.
         Ton travail est de trouver les informations suivantes et de me les renvoyer STRICTEMENT au format JSON.
@@ -59,13 +81,12 @@ async def extract_pdf(file: UploadFile = File(...)):
         {extracted_text}
         """
         
-        # URL v1 officielle + modèle 1.5-flash surpuissant
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        # 3. L'attaque avec le modèle validé par Google
+        url = f"https://generativelanguage.googleapis.com/v1beta/{target_model}:generateContent?key={GEMINI_API_KEY}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}]
         }
         
-        # Attaque directe en HTTP
         api_response = requests.post(url, json=payload)
         
         if api_response.status_code != 200:
@@ -74,7 +95,7 @@ async def extract_pdf(file: UploadFile = File(...)):
         result_json = api_response.json()
         response_text = result_json['candidates'][0]['content']['parts'][0]['text'].strip()
         
-        # 3. Nettoyage et renvoi du JSON
+        # 4. Nettoyage et renvoi du JSON
         if response_text.startswith("```json"):
             response_text = response_text.replace("```json", "").replace("```", "").strip()
         elif response_text.startswith("```"):
@@ -83,7 +104,7 @@ async def extract_pdf(file: UploadFile = File(...)):
         extracted_data = json.loads(response_text)
 
         return {
-            "message": "Analyse IA terminée avec succès.",
+            "message": f"Analyse IA ({target_model}) terminée avec succès.",
             "filename": file.filename,
             "data": extracted_data
         }
