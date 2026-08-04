@@ -6,7 +6,7 @@ import json
 from pypdf import PdfReader
 import requests
 
-app = FastAPI(title="API Agent IA - Le Terminator", version="10.0")
+app = FastAPI(title="API Agent IA - Expert Comptable", version="11.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,7 +24,6 @@ async def extract_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Merci d'envoyer un vrai fichier PDF.")
     
     try:
-        # 1. Lecture du PDF
         contents = await file.read()
         pdf_file = io.BytesIO(contents)
         reader = PdfReader(pdf_file)
@@ -41,15 +40,19 @@ async def extract_pdf(file: UploadFile = File(...)):
         if not GEMINI_API_KEY:
             raise HTTPException(status_code=500, detail="Clé API non configurée.")
 
+        # --- NOUVEAU PROMPT DAF ---
         prompt = f"""
         Tu es un assistant comptable expert pour les DAF. Extraire les infos en JSON STRICT.
-        Ne réponds RIEN d'autre que l'objet JSON.
+        Ne réponds RIEN d'autre que l'objet JSON. Si une info est introuvable, mets "N/A" (ou 0.00 pour les montants).
         
         Format attendu :
         {{
             "fournisseur": "Nom de l'entreprise",
-            "montant_ttc": 0.00,
+            "numero_facture": "Numéro de la facture",
+            "date_emission": "Date de la facture (format JJ/MM/AAAA)",
+            "montant_ht": 0.00,
             "tva": 0.00,
+            "montant_ttc": 0.00,
             "iban": "Numéro IBAN ou N/A"
         }}
         
@@ -57,7 +60,6 @@ async def extract_pdf(file: UploadFile = File(...)):
         {extracted_text}
         """
 
-        # 2. LA BOUCLE TERMINATOR (Force Brute)
         models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
         models_response = requests.get(models_url)
         
@@ -70,20 +72,16 @@ async def extract_pdf(file: UploadFile = File(...)):
         target_model_used = None
         last_error = ""
 
-        # On teste tous les modèles un par un !
         for m in models_data:
             name = m.get("name", "")
             methods = m.get("supportedGenerationMethods", [])
             
             if "gemini" in name and "generateContent" in methods:
-                print(f"⏳ Tentative avec {name}...")
-                
                 url = f"https://generativelanguage.googleapis.com/v1beta/{name}:generateContent?key={GEMINI_API_KEY}"
                 payload = { "contents": [{"parts": [{"text": prompt}]}] }
                 
                 api_response = requests.post(url, json=payload)
                 
-                # Si le modèle accepte, on traite la donnée et on ARRETE LA BOUCLE !
                 if api_response.status_code == 200:
                     result_json = api_response.json()
                     response_text = result_json['candidates'][0]['content']['parts'][0]['text'].strip()
@@ -96,13 +94,10 @@ async def extract_pdf(file: UploadFile = File(...)):
                     try:
                         extracted_data = json.loads(response_text)
                         target_model_used = name
-                        print(f"✅ VICTOIRE avec {name} !")
                         break
                     except json.JSONDecodeError:
-                        print(f"⚠️ {name} a mal formaté le JSON. On passe au suivant.")
                         continue
                 else:
-                    print(f"❌ {name} a refusé (Erreur {api_response.status_code}).")
                     last_error = str(api_response.status_code)
 
         if not extracted_data:
