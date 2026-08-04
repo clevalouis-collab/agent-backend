@@ -6,7 +6,7 @@ import json
 from pypdf import PdfReader
 import requests
 
-app = FastAPI(title="API Agent IA Financier - Bypass Direct", version="6.0")
+app = FastAPI(title="API Agent IA Financier - Ultra Bypass", version="7.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,7 +16,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# LE CORRECTIF MAGIQUE EST ICI : .strip() écrase les espaces invisibles !
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
 @app.post("/extract-pdf")
 async def extract_pdf(file: UploadFile = File(...)):
@@ -38,7 +39,6 @@ async def extract_pdf(file: UploadFile = File(...)):
         if not extracted_text.strip():
             raise HTTPException(status_code=400, detail="Le PDF semble être un scan sans texte lisible.")
 
-        # 2. BYPASS : Appel direct à l'URL de Google (Sans utiliser leur bibliothèque buggée)
         if not GEMINI_API_KEY:
             raise HTTPException(status_code=500, detail="Clé API non configurée.")
 
@@ -59,17 +59,17 @@ async def extract_pdf(file: UploadFile = File(...)):
         {extracted_text}
         """
         
-        # L'URL d'attaque directe
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+        # URL v1 officielle + modèle 1.5-flash surpuissant
+        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}]
         }
         
-        # On frappe à la porte en HTTP pur
+        # Attaque directe en HTTP
         api_response = requests.post(url, json=payload)
         
         if api_response.status_code != 200:
-            raise Exception(f"Refus de Google : {api_response.text}")
+            raise Exception(f"Refus de Google ({api_response.status_code}) : {api_response.text}")
             
         result_json = api_response.json()
         response_text = result_json['candidates'][0]['content']['parts'][0]['text'].strip()
