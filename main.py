@@ -6,7 +6,7 @@ import json
 from pypdf import PdfReader
 import google.generativeai as genai
 
-app = FastAPI(title="API Agent IA Financier - Cerveau Gemini Stable", version="4.0")
+app = FastAPI(title="API Agent IA Financier - Cerveau Stable", version="5.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,11 +40,13 @@ async def extract_pdf(file: UploadFile = File(...)):
         if not extracted_text.strip():
             raise HTTPException(status_code=400, detail="Le PDF semble être un scan sans texte lisible.")
 
-        # 2. IA Google (Méthode stable)
+        # 2. IA Google (Le modèle universel 'gemini-pro')
         if not GEMINI_API_KEY:
             raise HTTPException(status_code=500, detail="Clé API non configurée.")
 
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # CHANGEMENT ICI : On utilise le modèle le plus stable
+        model = genai.GenerativeModel('gemini-pro') 
+        
         prompt = f"""
         Tu es un assistant comptable expert pour les DAF. Voici le texte extrait d'une facture.
         Ton travail est de trouver les informations suivantes et de me les renvoyer STRICTEMENT au format JSON.
@@ -78,6 +80,5 @@ async def extract_pdf(file: UploadFile = File(...)):
         }
         
     except Exception as e:
-        # L'alarme rouge dans les logs Render
         print(f"🚨 ERREUR CRASH IA : {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erreur du serveur IA : {str(e)}")
