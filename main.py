@@ -6,7 +6,7 @@ import json
 from pypdf import PdfReader
 import requests
 
-app = FastAPI(title="API Agent IA Financier - Auto-Pilote", version="8.0")
+app = FastAPI(title="API Agent IA Financier - Auto-Pilote Esquive", version="9.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,7 +41,7 @@ async def extract_pdf(file: UploadFile = File(...)):
         if not GEMINI_API_KEY:
             raise HTTPException(status_code=500, detail="Clé API non configurée.")
 
-        # 2. AUTO-DISCOVERY : On demande à Google quel modèle utiliser !
+        # 2. AUTO-DISCOVERY : On liste les modèles
         models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
         models_response = requests.get(models_url)
         
@@ -50,17 +50,17 @@ async def extract_pdf(file: UploadFile = File(...)):
             
         models_data = models_response.json().get("models", [])
         
-        # On cherche le premier modèle Gemini autorisé à lire du texte sur ton compte
+        # L'ESQUIVE EST ICI : On ignore le modèle "2.5-flash" qui est buggé pour les nouveaux comptes
         target_model = None
         for m in models_data:
             name = m.get("name", "")
             methods = m.get("supportedGenerationMethods", [])
-            if "gemini" in name and "generateContent" in methods:
+            if "gemini" in name and "generateContent" in methods and "2.5-flash" not in name:
                 target_model = name
                 break
         
         if not target_model:
-            raise Exception("Aucun modèle Gemini compatible trouvé sur ton compte.")
+            raise Exception("Aucun modèle Gemini compatible trouvé en dehors du modèle bloqué.")
 
         print(f"✅ Modèle trouvé et sélectionné automatiquement : {target_model}")
 
@@ -81,7 +81,7 @@ async def extract_pdf(file: UploadFile = File(...)):
         {extracted_text}
         """
         
-        # 3. L'attaque avec le modèle validé par Google
+        # 3. L'attaque avec le bon modèle
         url = f"https://generativelanguage.googleapis.com/v1beta/{target_model}:generateContent?key={GEMINI_API_KEY}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}]
