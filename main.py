@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="API Agent IA - CLFinance Batch Pro", version="31.0")
+app = FastAPI(title="API Agent IA - CLFinance Batch Pro", version="31.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,7 +20,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-executor = ThreadPoolExecutor(max_workers=5) # On réduit légèrement pour laisser respirer l'API
+executor = ThreadPoolExecutor(max_workers=3)
 
 def process_single_file(file_bytes: bytes, filename: str, api_key: str):
     filename_lower = filename.lower()
@@ -58,8 +58,7 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
         headers={'Content-Type': 'application/json'}
     )
     
-    # Système de reessai automatique si l'API est saturée (Erreur 429)
-    max_retries = 3
+    max_retries = 15
     for attempt in range(max_retries):
         try:
             with urllib.request.urlopen(req) as response:
@@ -74,9 +73,8 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
             return {"filename": filename, "data": data_json}
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < max_retries - 1:
-                time.sleep(2 * (attempt + 1)) # Attente exponentielle avant de réessayer
+                time.sleep(3 * (attempt + 1))
                 continue
-            err_body = e.read().decode('utf-8')
             return {"filename": filename, "error": f"Erreur HTTP {e.code}"}
         except Exception as e:
             return {"filename": filename, "error": str(e)}
