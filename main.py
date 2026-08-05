@@ -2,6 +2,7 @@ import os
 import json
 import base64
 import asyncio
+import time
 import urllib.request
 import urllib.error
 from typing import List
@@ -9,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="API Agent IA - CLFinance Batch", version="30.0")
+app = FastAPI(title="API Agent IA - CLFinance Batch Pro", version="31.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,8 +20,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Pool de threads pour exécuter les requêtes IA en parallèle
-executor = ThreadPoolExecutor(max_workers=10)
+executor = ThreadPoolExecutor(max_workers=5) # On réduit légèrement pour laisser respirer l'API
 
 def process_single_file(file_bytes: bytes, filename: str, api_key: str):
     filename_lower = filename.lower()
@@ -58,19 +58,28 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
         headers={'Content-Type': 'application/json'}
     )
     
-    try:
-        with urllib.request.urlopen(req) as response:
-            result = json.loads(response.read().decode('utf-8'))
+    # Système de reessai automatique si l'API est saturée (Erreur 429)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            with urllib.request.urlopen(req) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                
+            raw_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
+            if raw_text.startswith("```json"): raw_text = raw_text.replace("```json", "", 1)
+            if raw_text.startswith("```"): raw_text = raw_text.replace("```", "", 1)
+            if raw_text.endswith("```"): raw_text = raw_text[:raw_text.rfind("```")]
             
-        raw_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
-        if raw_text.startswith("```json"): raw_text = raw_text.replace("```json", "", 1)
-        if raw_text.startswith("```"): raw_text = raw_text.replace("```", "", 1)
-        if raw_text.endswith("```"): raw_text = raw_text[:raw_text.rfind("```")]
-        
-        data_json = json.loads(raw_text.strip())
-        return {"filename": filename, "data": data_json}
-    except Exception as e:
-        return {"filename": filename, "error": str(e)}
+            data_json = json.loads(raw_text.strip())
+            return {"filename": filename, "data": data_json}
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < max_retries - 1:
+                time.sleep(2 * (attempt + 1)) # Attente exponentielle avant de réessayer
+                continue
+            err_body = e.read().decode('utf-8')
+            return {"filename": filename, "error": f"Erreur HTTP {e.code}"}
+        except Exception as e:
+            return {"filename": filename, "error": str(e)}
 
 @app.post("/extract-batch")
 async def extract_batch(files: List[UploadFile] = File(...)):
@@ -83,7 +92,6 @@ async def extract_batch(files: List[UploadFile] = File(...)):
     
     for file in files:
         file_bytes = await file.read()
-        # On lance chaque fichier en parallèle dans le pool de threads
         tasks.append(
             loop.run_in_executor(executor, process_single_file, file_bytes, file.filename, api_key)
         )
