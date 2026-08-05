@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from google import genai
 from google.genai import types
 
-app = FastAPI(title="API Agent IA - CLFinance SDK Officiel", version="50.0")
+app = FastAPI(title="API Agent IA - CLFinance Final 3.6", version="51.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,8 +37,9 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
             mime_type=mime_type,
         )
         
+        # UTILISATION DU MODÈLE PRÉSENT DANS TON DASHBOARD : gemini-3.6-flash
         response = client.models.generate_content(
-            model='gemini-2.0-flash',
+            model='gemini-3.6-flash',
             contents=[prompt, image_part]
         )
         
