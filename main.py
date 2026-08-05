@@ -1,14 +1,12 @@
 import os
-import json
-import base64
 import asyncio
-import time
 from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
-app = FastAPI(title="API Agent IA - CLFinance Enterprise SDK", version="35.0")
+app = FastAPI(title="API Agent IA - CLFinance Bulldozer", version="37.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,33 +25,41 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
     elif filename_lower.endswith(".png"):
         mime_type = "image/png"
     else:
-        return {"filename": filename, "error": "Format non supporté"}
+        return {"filename": filename, "error": "Format non supporté (PDF, JPG, PNG uniquement)"}
 
-    try:
-        genai.configure(api_key=api_key)
-        # On utilise le modèle flash le plus stable et standard du marché
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        prompt = "Tu es un DAF de CLFinance. Analyse ce document (facture ou reçu). Renvoie UNIQUEMENT un objet JSON valide avec les clés exactes : fournisseur, numero_facture, date_emission, montant_ht, tva, montant_ttc, devise, iban. Si une info est illisible, mets null. Aucun autre texte."
-        
-        # Format attendu par le SDK officiel pour les fichiers binaires
-        image_part = {
-            "mime_type": mime_type,
-            "data": base64.b64encode(file_bytes).decode('utf-8')
-        }
-        
-        response = model.generate_content([prompt, image_part])
-        raw_text = response.text.strip()
-        
-        if raw_text.startswith("```json"): raw_text = raw_text.replace("```json", "", 1)
-        if raw_text.startswith("```"): raw_text = raw_text.replace("```", "", 1)
-        if raw_text.endswith("```"): raw_text = raw_text[:raw_text.rfind("```")]
-        
-        data_json = json.loads(raw_text.strip())
-        return {"filename": filename, "data": data_json}
-        
-    except Exception as e:
-        return {"filename": filename, "error": str(e)}
+    # Tentative blindée avec 3 essais automatiques en cas de micro-coupure réseau
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            client = genai.Client(api_key=api_key)
+            model = 'gemini-2.0-flash'
+            
+            prompt = "Tu es un DAF de CLFinance. Analyse ce document (facture ou reçu). Renvoie UNIQUEMENT un objet JSON valide avec les clés exactes : fournisseur, numero_facture, date_emission, montant_ht, tva, montant_ttc, devise, iban. Si une info est illisible, mets null. Aucun autre texte."
+            
+            image_part = types.Part.from_bytes(
+                data=file_bytes,
+                mime_type=mime_type,
+            )
+            
+            response = client.models.generate_content(
+                model=model,
+                contents=[prompt, image_part]
+            )
+            
+            raw_text = response.text.strip()
+            if raw_text.startswith("```json"): raw_text = raw_text.replace("```json", "", 1)
+            if raw_text.startswith("```"): raw_text = raw_text.replace("```", "", 1)
+            if raw_text.endswith("```"): raw_text = raw_text[:raw_text.rfind("```")]
+            
+            import json
+            data_json = json.loads(raw_text.strip())
+            return {"filename": filename, "data": data_json}
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2) # Petite pause locale avant de retenter
+                continue
+            return {"filename": filename, "error": str(e)}
 
 @app.post("/extract-batch")
 async def extract_batch(files: List[UploadFile] = File(...)):
@@ -62,11 +68,12 @@ async def extract_batch(files: List[UploadFile] = File(...)):
         raise HTTPException(status_code=500, detail="Clé API manquante dans Render.")
         
     results = []
+    # Mode Bulldozer : Traitement un par un propre, sans s'affoler, cadencé à la perfection
     for file in files:
         file_bytes = await file.read()
         res = process_single_file(file_bytes, file.filename, api_key)
         results.append(res)
-        await asyncio.sleep(0.5) # Petite pause fluide anti-surcharge
+        await asyncio.sleep(1.2) # Pause de sécurité anti-saturation Google
         
     return {"results": results}
 
