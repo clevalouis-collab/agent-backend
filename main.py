@@ -4,7 +4,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import google.generativeai as genai
 
-app = FastAPI(title="API Agent IA - Expert Comptable Vision", version="12.0")
+app = FastAPI(title="API Agent IA - Expert Comptable Vision", version="13.0")
 
 # Configuration CORS pour autoriser ton site Vercel à communiquer avec le serveur
 app.add_middleware(
@@ -31,8 +31,8 @@ async def extract_pdf(file: UploadFile = File(...)):
         # On lit directement les octets du fichier PDF
         pdf_bytes = await file.read()
         
-        # On utilise le modèle Flash qui est ultrarapide et gère la vision PDF nativement
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # On utilise le modèle Pro pour contourner l'erreur 404 et avoir la meilleure vision possible
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         
         prompt = """
         Tu es un DAF (Directeur Administratif et Financier) expert.
