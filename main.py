@@ -9,7 +9,7 @@ from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="API Agent IA - CLFinance Debug Pro", version="48.0")
+app = FastAPI(title="API Agent IA - CLFinance Final Fix", version="49.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,8 +32,8 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
 
     file_base64 = base64.b64encode(file_bytes).decode('utf-8')
     
-    # Utilisation de l'alias stable -latest validé sur l'API v1beta
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}"
+    # URL OFFICIELLE v1 ET MODÈLE PROpre (fini les bêtises de v1beta et -latest)
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
     
     payload = {
         "contents": [{
