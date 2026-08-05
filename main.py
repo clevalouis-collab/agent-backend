@@ -78,3 +78,4 @@ async def extract_pdf_single(file: UploadFile = File(...)):
     file_bytes = await file.read()
     res = process_single_file(file_bytes, file.filename, api_key)
     return res
+
