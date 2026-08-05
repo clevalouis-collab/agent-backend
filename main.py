@@ -6,7 +6,7 @@ import urllib.error
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="API Agent IA - Tout Terrain", version="27.0")
+app = FastAPI(title="API Agent IA - CLFinance", version="29.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -18,7 +18,7 @@ app.add_middleware(
 
 @app.post("/extract-pdf")
 async def extract_pdf(file: UploadFile = File(...)):
-    # 1. On accepte les PDF ET les images (les fameuses "photos de merde")
+    # Détection auto PDF ou Image
     filename = file.filename.lower()
     if filename.endswith(".pdf"):
         mime_type = "application/pdf"
@@ -34,22 +34,22 @@ async def extract_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail="Clé API manquante dans Render.")
         
     try:
-        # 2. Lecture du fichier
         file_bytes = await file.read()
         file_base64 = base64.b64encode(file_bytes).decode('utf-8')
         
-        # 3. Le tir sur gemini-3.6-flash
+        # Tir sur ton super-modèle débloqué
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
         
         payload = {
             "contents": [{
                 "parts": [
                     {
-                        "text": "Tu es un DAF. Analyse ce document (facture ou reçu). S'il est de mauvaise qualité, fais de ton mieux pour extraire les infos. Renvoie UNIQUEMENT un objet JSON valide avec les clés exactes : fournisseur, numero_facture, date_emission, montant_ht, tva, montant_ttc, iban. Si une info est illisible, mets null. Aucun autre texte."
+                        # C'EST ICI QUE ÇA CHANGE : On a rajouté "devise" dans la liste des clés exactes
+                        "text": "Tu es un DAF de CLFinance. Analyse ce document (facture ou reçu). S'il est de mauvaise qualité, fais de ton mieux. Renvoie UNIQUEMENT un objet JSON valide avec les clés exactes : fournisseur, numero_facture, date_emission, montant_ht, tva, montant_ttc, devise, iban. Si une info est illisible, mets null. Aucun autre texte."
                     },
                     {
                         "inline_data": {
-                            "mime_type": mime_type, # <-- ICI : On donne le VRAI format à Google
+                            "mime_type": mime_type,
                             "data": file_base64
                         }
                     }
@@ -70,7 +70,6 @@ async def extract_pdf(file: UploadFile = File(...)):
             err_msg = e.read().decode('utf-8')
             raise Exception(f"Erreur Google : {err_msg}")
             
-        # 4. Extraction chirurgicale
         raw_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
         
         if raw_text.startswith("```json"): raw_text = raw_text.replace("```json", "", 1)
