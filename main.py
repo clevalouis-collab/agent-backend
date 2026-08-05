@@ -9,7 +9,7 @@ from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="API Agent IA - CLFinance Production", version="40.0")
+app = FastAPI(title="API Agent IA - CLFinance Production Fix", version="41.0")
 
 app.add_middleware(
     CORSMiddleware,
