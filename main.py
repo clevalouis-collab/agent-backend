@@ -9,7 +9,7 @@ from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="API Agent IA - CLFinance Production Fix", version="41.0")
+app = FastAPI(title="API Agent IA - CLFinance Production Finale", version="42.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,7 +31,9 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
         return {"filename": filename, "error": "Format non supporté"}
 
     file_base64 = base64.b64encode(file_bytes).decode('utf-8')
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    
+    # URL mise à jour avec le modèle standard supporté par l'API Google
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
     
     payload = {
         "contents": [{
@@ -70,10 +72,12 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
             return {"filename": filename, "data": data_json}
             
         except urllib.error.HTTPError as e:
+            # On récupère le message d'erreur précis renvoyé par Google si besoin
+            error_message = e.read().decode('utf-8') if e.fp else str(e)
             if e.code == 429 and attempt < max_retries - 1:
                 time.sleep(3 * (attempt + 1))
                 continue
-            return {"filename": filename, "error": f"Erreur HTTP {e.code}"}
+            return {"filename": filename, "error": f"Google API Error {e.code}"}
         except Exception as e:
             if attempt < max_retries - 1:
                 time.sleep(2)
