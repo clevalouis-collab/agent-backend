@@ -6,7 +6,7 @@ import urllib.error
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="API Agent IA - Pur HTTP Final", version="24.0")
+app = FastAPI(title="API Agent IA - Pur HTTP Final", version="26.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,12 +26,12 @@ async def extract_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail="Clé API manquante dans Render.")
         
     try:
-        # 1. Lecture du PDF
+        # 1. Lecture de la facture
         pdf_bytes = await file.read()
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
         
-        # 2. Le tir de précision (Une seule requête sur le modèle le plus stable)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}"
+        # 2. Le tir de sniper sur ton VRAI modèle dispo (gemini-3.6-flash)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
         
         payload = {
             "contents": [{
@@ -62,7 +62,7 @@ async def extract_pdf(file: UploadFile = File(...)):
             err_msg = e.read().decode('utf-8')
             raise Exception(f"Erreur Google : {err_msg}")
             
-        # 3. Extraction chirurgicale
+        # 3. Extraction de la donnée
         raw_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
         
         if raw_text.startswith("```json"): raw_text = raw_text.replace("```json", "", 1)
