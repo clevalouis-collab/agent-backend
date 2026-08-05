@@ -1,13 +1,12 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-import io
 import os
 import json
-from pypdf import PdfReader
-import requests
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import google.generativeai as genai
 
-app = FastAPI(title="API Agent IA - Expert Comptable", version="11.0")
+app = FastAPI(title="API Agent IA - Expert Comptable Vision", version="12.0")
 
+# Configuration CORS pour autoriser ton site Vercel à communiquer avec le serveur
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,98 +15,69 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+# Configuration de l'API Gemini
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    print("ATTENTION: Variable d'environnement GEMINI_API_KEY manquante.")
+genai.configure(api_key=GEMINI_API_KEY)
 
 @app.post("/extract-pdf")
 async def extract_pdf(file: UploadFile = File(...)):
-    if not file.filename.lower().endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Merci d'envoyer un vrai fichier PDF.")
-    
+    # Vérification du format
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Seuls les fichiers PDF sont acceptés.")
+        
     try:
-        contents = await file.read()
-        pdf_file = io.BytesIO(contents)
-        reader = PdfReader(pdf_file)
+        # On lit directement les octets du fichier PDF
+        pdf_bytes = await file.read()
         
-        extracted_text = ""
-        for page in reader.pages:
-            text = page.extract_text()
-            if text:
-                extracted_text += text + "\n"
+        # On utilise le modèle Flash qui est ultrarapide et gère la vision PDF nativement
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
-        if not extracted_text.strip():
-            raise HTTPException(status_code=400, detail="Le PDF semble être un scan.")
-
-        if not GEMINI_API_KEY:
-            raise HTTPException(status_code=500, detail="Clé API non configurée.")
-
-        prompt = f"""
-        Tu es un assistant comptable expert pour les DAF. Extraire les infos en JSON STRICT.
-        Ne réponds RIEN d'autre que l'objet JSON. Si une info est introuvable, mets "N/A" (ou 0.00 pour les montants).
+        prompt = """
+        Tu es un DAF (Directeur Administratif et Financier) expert.
+        Analyse visuellement cette facture en pièce jointe et extrais les informations clés.
         
-        Format attendu :
-        {{
+        Renvoie-moi UNIQUEMENT un objet JSON valide avec les clés exactes suivantes, sans aucun autre texte autour, sans markdown (pas de ```json) :
+        {
             "fournisseur": "Nom de l'entreprise",
-            "numero_facture": "Numéro de la facture",
-            "date_emission": "Date de la facture (format JJ/MM/AAAA)",
+            "numero_facture": "Le numéro de la facture",
+            "date_emission": "JJ/MM/AAAA",
             "montant_ht": 0.00,
             "tva": 0.00,
             "montant_ttc": 0.00,
-            "iban": "Numéro IBAN ou N/A"
-        }}
-        
-        Texte de la facture :
-        {extracted_text}
-        """
-
-        models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-        models_response = requests.get(models_url)
-        
-        if models_response.status_code != 200:
-            raise Exception("Impossible de lire la liste des modèles Google.")
-            
-        models_data = models_response.json().get("models", [])
-        
-        extracted_data = None
-        target_model_used = None
-        last_error = ""
-
-        for m in models_data:
-            name = m.get("name", "")
-            methods = m.get("supportedGenerationMethods", [])
-            
-            if "gemini" in name and "generateContent" in methods:
-                url = f"https://generativelanguage.googleapis.com/v1beta/{name}:generateContent?key={GEMINI_API_KEY}"
-                payload = { "contents": [{"parts": [{"text": prompt}]}] }
-                
-                api_response = requests.post(url, json=payload)
-                
-                if api_response.status_code == 200:
-                    result_json = api_response.json()
-                    response_text = result_json['candidates'][0]['content']['parts'][0]['text'].strip()
-                    
-                    if response_text.startswith("```json"):
-                        response_text = response_text.replace("```json", "").replace("```", "").strip()
-                    elif response_text.startswith("```"):
-                        response_text = response_text.replace("```", "").strip()
-                    
-                    try:
-                        extracted_data = json.loads(response_text)
-                        target_model_used = name
-                        break
-                    except json.JSONDecodeError:
-                        continue
-                else:
-                    last_error = str(api_response.status_code)
-
-        if not extracted_data:
-            raise Exception(f"Tous les modèles ont échoué. Dernière erreur : {last_error}")
-
-        return {
-            "message": f"Analyse IA ({target_model_used}) réussie.",
-            "filename": file.filename,
-            "data": extracted_data
+            "iban": "L'IBAN s'il y en a un, sinon null"
         }
+        """
         
+        # On envoie le PDF brut directement dans la vision de l'IA
+        response = model.generate_content([
+            prompt,
+            {
+                "mime_type": "application/pdf",
+                "data": pdf_bytes
+            }
+        ])
+        
+        # Nettoyage de la réponse pour s'assurer d'avoir un JSON pur
+        raw_text = response.text.strip()
+        if raw_text.startswith("```json"):
+            raw_text = raw_text.replace("```json", "", 1)
+        if raw_text.startswith("```"):
+            raw_text = raw_text.replace("```", "", 1)
+        if raw_text.endswith("```"):
+            raw_text = raw_text[:raw_text.rfind("```")]
+            
+        raw_text = raw_text.strip()
+        
+        # Conversion du texte en vrai dictionnaire Python
+        parsed_data = json.loads(raw_text)
+        
+        return {"data": parsed_data}
+        
+    except json.JSONDecodeError:
+        print(f"Erreur de décodage JSON. Réponse brute : {response.text}")
+        raise HTTPException(status_code=500, detail="L'IA n'a pas renvoyé un format de données valide.")
     except Exception as e:
-        print(f"🚨 ERREUR CRASH IA : {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erreur du serveur IA : {str(e)}")
+        print(f"Erreur serveur : {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur lors de l'analyse : {str(e)}")
