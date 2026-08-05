@@ -9,7 +9,7 @@ from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="API Agent IA - CLFinance Natif Bulldozer", version="39.0")
+app = FastAPI(title="API Agent IA - CLFinance Natif Bulldozer", version="39.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,7 +31,6 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
         return {"filename": filename, "error": "Format non supporté"}
 
     file_base64 = base64.b64encode(file_bytes).decode('utf-8')
-    # URL native standardisée Google AI
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     
     payload = {
@@ -88,12 +87,11 @@ async def extract_batch(files: List[UploadFile] = File(...)):
         raise HTTPException(status_code=500, detail="Clé API manquante dans Render.")
         
     results = []
-    # Mode Bulldozer Séquentiel propre
     for file in files:
         file_bytes = await file.read()
         res = process_single_file(file_bytes, file.filename, api_key)
         results.append(res)
-        await asyncio.sleep(1.2) # Pause anti-surcharge
+        await asyncio.sleep(1.2)
         
     return {"results": results}
 
