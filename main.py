@@ -3,13 +3,12 @@ import json
 import base64
 import asyncio
 import time
-import urllib.request
-import urllib.error
 from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+import google.generativeai as genai
 
-app = FastAPI(title="API Agent IA - CLFinance The Original 3.6", version="43.0")
+app = FastAPI(title="API Agent IA - CLFinance SDK Production", version="44.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,40 +29,24 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
     else:
         return {"filename": filename, "error": "Format non supporté"}
 
-    file_base64 = base64.b64encode(file_bytes).decode('utf-8')
+    genai.configure(api_key=api_key)
     
-    # RETOUR AU MODÈLE INITIAL DE PREMIER CHOIX : gemini-3.6-flash
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
-    
-    payload = {
-        "contents": [{
-            "parts": [
-                {
-                    "text": "Tu es un DAF de CLFinance. Analyse ce document (facture ou reçu). Renvoie UNIQUEMENT un objet JSON valide avec les clés exactes : fournisseur, numero_facture, date_emission, montant_ht, tva, montant_ttc, devise, iban. Si une info est illisible, mets null. Aucun autre texte."
-                },
-                {
-                    "inline_data": {
-                        "mime_type": mime_type,
-                        "data": file_base64
-                    }
-                }
-            ]
-        }]
-    }
-    
-    req = urllib.request.Request(
-        url, 
-        data=json.dumps(payload).encode('utf-8'), 
-        headers={'Content-Type': 'application/json'}
-    )
-    
-    max_retries = 4
+    max_retries = 5
     for attempt in range(max_retries):
         try:
-            with urllib.request.urlopen(req, timeout=30) as response:
-                result = json.loads(response.read().decode('utf-8'))
-                
-            raw_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
+            # Utilisation du SDK officiel avec le modèle standard ultra-stable
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            
+            prompt = "Tu es un DAF de CLFinance. Analyse ce document (facture ou reçu). Renvoie UNIQUEMENT un objet JSON valide avec les clés exactes : fournisseur, numero_facture, date_emission, montant_ht, tva, montant_ttc, devise, iban. Si une info est illisible, mets null. Aucun autre texte."
+            
+            image_part = {
+                "mime_type": mime_type,
+                "data": base64.b64encode(file_bytes).decode('utf-8')
+            }
+            
+            response = model.generate_content([prompt, image_part])
+            raw_text = response.text.strip()
+            
             if raw_text.startswith("```json"): raw_text = raw_text.replace("```json", "", 1)
             if raw_text.startswith("```"): raw_text = raw_text.replace("```", "", 1)
             if raw_text.endswith("```"): raw_text = raw_text[:raw_text.rfind("```")]
@@ -71,16 +54,16 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
             data_json = json.loads(raw_text.strip())
             return {"filename": filename, "data": data_json}
             
-        except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt < max_retries - 1:
-                time.sleep(3 * (attempt + 1)) # Pause progressive si le quota tousse
-                continue
-            return {"filename": filename, "error": f"Erreur HTTP {e.code}"}
         except Exception as e:
+            error_str = str(e)
+            if "429" in error_str or "ResourceExhausted" in error_str:
+                if attempt < max_retries - 1:
+                    time.sleep(3 * (attempt + 1)) # Attente progressive anti-saturation
+                    continue
             if attempt < max_retries - 1:
                 time.sleep(2)
                 continue
-            return {"filename": filename, "error": str(e)}
+            return {"filename": filename, "error": error_str}
 
 @app.post("/extract-batch")
 async def extract_batch(files: List[UploadFile] = File(...)):
@@ -93,7 +76,7 @@ async def extract_batch(files: List[UploadFile] = File(...)):
         file_bytes = await file.read()
         res = process_single_file(file_bytes, file.filename, api_key)
         results.append(res)
-        await asyncio.sleep(1.5) # Espacement parfait pour ne pas saturer
+        await asyncio.sleep(2.0) # Pause de sécurité indispensable entre chaque fichier pour respecter les quotas
         
     return {"results": results}
 
