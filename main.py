@@ -9,7 +9,7 @@ from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="API Agent IA - CLFinance V1 Stable", version="46.0")
+app = FastAPI(title="API Agent IA - CLFinance Debug Pro", version="48.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,8 +32,8 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
 
     file_base64 = base64.b64encode(file_bytes).decode('utf-8')
     
-    # URL OFFICIELLE STABLE v1 (et non v1beta) pour gemini-1.5-flash
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
+    # Utilisation de l'alias stable -latest validé sur l'API v1beta
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}"
     
     payload = {
         "contents": [{
@@ -64,19 +64,22 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
                 result = json.loads(response.read().decode('utf-8'))
                 
             raw_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
-            if raw_text.startswith("```json"): raw_text = raw_text.replace("```json", "", 1)
-            if raw_text.startswith("```"): raw_text = raw_text.replace("```", "", 1)
-            if raw_text.endswith("```"): raw_text = raw_text[:raw_text.rfind("```")]
+            if raw_text.startswith("```json"):
+                raw_text = raw_text.replace("```json", "", 1)
+            if raw_text.startswith("```"):
+                raw_text = raw_text.replace("```", "", 1)
+            if raw_text.endswith("```"):
+                raw_text = raw_text[:raw_text.rfind("```")]
             
             data_json = json.loads(raw_text.strip())
             return {"filename": filename, "data": data_json}
             
         except urllib.error.HTTPError as e:
-            error_body = e.read().decode('utf-8') if e.fp else ""
+            error_details = e.read().decode('utf-8') if e.fp else str(e)
             if e.code == 429 and attempt < max_retries - 1:
                 time.sleep(3 * (attempt + 1))
                 continue
-            return {"filename": filename, "error": f"Erreur Google HTTP {e.code}"}
+            return {"filename": filename, "error": f"HTTP {e.code}: {error_details[:120]}"}
         except Exception as e:
             if attempt < max_retries - 1:
                 time.sleep(2)
@@ -94,7 +97,7 @@ async def extract_batch(files: List[UploadFile] = File(...)):
         file_bytes = await file.read()
         res = process_single_file(file_bytes, file.filename, api_key)
         results.append(res)
-        await asyncio.sleep(1.5) # Pause de courtoisie anti-saturation
+        await asyncio.sleep(1.5)
         
     return {"results": results}
 
