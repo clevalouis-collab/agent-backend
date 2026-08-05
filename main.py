@@ -4,9 +4,8 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import google.generativeai as genai
 
-app = FastAPI(title="API Agent IA - Expert Comptable Vision", version="14.0")
+app = FastAPI(title="API Agent IA - Expert Comptable Vision", version="15.0")
 
-# Configuration CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,11 +14,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configuration de l'API Gemini
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    print("ATTENTION: Variable d'environnement GEMINI_API_KEY manquante.")
+    print("ATTENTION: Variable d'environnement manquante.")
 genai.configure(api_key=GEMINI_API_KEY)
+
+# LA SOLUTION DE FORCE : Le code cherche lui-même le bon modèle dispo pour ta clé
+def get_working_vision_model():
+    for m in genai.list_models():
+        if 'generateContent' in m.supported_generation_methods:
+            # On cherche un modèle 1.5 (qui gère la vision PDF/Image)
+            if '1.5' in m.name:
+                return m.name
+    # Si vraiment il ne trouve pas, il tente le standard de base
+    return 'models/gemini-1.5-flash'
 
 @app.post("/extract-pdf")
 async def extract_pdf(file: UploadFile = File(...)):
@@ -29,8 +37,11 @@ async def extract_pdf(file: UploadFile = File(...)):
     try:
         pdf_bytes = await file.read()
         
-        # Le nom STRICT du modèle, sans les suffixes capricieux
-        model = genai.GenerativeModel('gemini-1.5-pro')
+        # On appelle notre détecteur automatique
+        model_name = get_working_vision_model()
+        print(f"✅ Modèle trouvé et forcé : {model_name}")
+        
+        model = genai.GenerativeModel(model_name)
         
         prompt = """
         Tu es un DAF (Directeur Administratif et Financier) expert.
@@ -69,9 +80,6 @@ async def extract_pdf(file: UploadFile = File(...)):
         
         return {"data": parsed_data}
         
-    except json.JSONDecodeError:
-        print(f"Erreur de décodage JSON. Réponse brute : {response.text}")
-        raise HTTPException(status_code=500, detail="L'IA n'a pas renvoyé un format de données valide.")
     except Exception as e:
-        print(f"Erreur serveur : {e}")
-        raise HTTPException(status_code=500, detail=f"Erreur lors de l'analyse : {str(e)}")
+        print(f"❌ Erreur serveur : {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur : {str(e)}")
