@@ -6,7 +6,7 @@ import urllib.error
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="API Agent IA - Pur HTTP", version="20.0")
+app = FastAPI(title="API Agent IA - Pur HTTP", version="21.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,12 +26,17 @@ async def extract_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail="Clé API manquante dans Render.")
         
     try:
-        # 1. On lit le PDF et on le transforme en texte chiffré (Base64) pour voyager sur le web
+        # 1. Préparation du PDF
         pdf_bytes = await file.read()
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
         
-        # 2. On contourne la bibliothèque Google en tapant directement sur leur serveur REST
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        # 2. La sulfateuse : On teste les noms de modèles un par un
+        models_to_try = [
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-pro-latest",
+            "gemini-1.5-pro",
+            "gemini-1.5-flash-001"
+        ]
         
         payload = {
             "contents": [{
@@ -49,20 +54,29 @@ async def extract_pdf(file: UploadFile = File(...)):
             }]
         }
         
-        # 3. Envoi de la roquette
-        req = urllib.request.Request(
-            url, 
-            data=json.dumps(payload).encode('utf-8'), 
-            headers={'Content-Type': 'application/json'}
-        )
+        result = None
         
-        try:
-            with urllib.request.urlopen(req) as response:
-                result = json.loads(response.read().decode('utf-8'))
-        except urllib.error.HTTPError as e:
-            error_info = e.read().decode()
-            print(f"Refus du serveur Google : {error_info}")
-            raise Exception(f"Clé API rejetée ou erreur Google ({e.code}). Vérifie la clé.")
+        # 3. Assaut HTTP direct
+        for model_name in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+            req = urllib.request.Request(
+                url, 
+                data=json.dumps(payload).encode('utf-8'), 
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            try:
+                print(f"Tentative de connexion au modèle : {model_name}...")
+                with urllib.request.urlopen(req) as response:
+                    result = json.loads(response.read().decode('utf-8'))
+                    print(f"✅ BINGO ! Le modèle {model_name} a répondu.")
+                    break # On a la réponse, on stoppe la boucle
+            except urllib.error.HTTPError as e:
+                print(f"❌ Échec pour {model_name}.")
+                continue # On passe au nom de modèle suivant
+                
+        if not result:
+            raise Exception("Google a refusé tous les noms de modèles de la liste.")
             
         # 4. Extraction chirurgicale
         raw_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
