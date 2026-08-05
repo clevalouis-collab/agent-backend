@@ -1,10 +1,11 @@
 import os
 import json
+import tempfile
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import google.generativeai as genai
 
-app = FastAPI(title="API Agent IA", version="16.0")
+app = FastAPI(title="API Agent IA", version="17.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,45 +22,31 @@ async def extract_pdf(file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF uniquement.")
         
+    temp_file_path = ""
+    uploaded_gemini_file = None
+    
     try:
-        pdf_bytes = await file.read()
+        # 1. Création d'un vrai fichier temporaire (Exigence absolue de Google pour les PDF)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+            temp_file.write(await file.read())
+            temp_file_path = temp_file.name
+            
+        # 2. Upload OFFICIEL via l'API Fichier de Google
+        uploaded_gemini_file = genai.upload_file(path=temp_file_path, display_name=file.filename)
+        
+        # 3. L'IA lit le fichier
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
         prompt = """
         Tu es un DAF. Analyse visuellement cette facture.
         Renvoie UNIQUEMENT un objet JSON valide avec les clés exactes suivantes, sans aucun autre texte autour, sans markdown (pas de ```json) :
         {"fournisseur": "Nom", "numero_facture": "Num", "date_emission": "JJ/MM/AAAA", "montant_ht": 0.0, "tva": 0.0, "montant_ttc": 0.0, "iban": "IBAN ou null"}
         """
         
-        # LA FORCE BRUTE : On tire dans le tas jusqu'à ce que Google accepte
-        models_to_try = [
-            'gemini-1.5-flash-001',
-            'gemini-1.5-pro-001',
-            'gemini-1.5-flash',
-            'gemini-1.5-pro',
-            'gemini-1.5-flash-latest',
-            'gemini-1.5-pro-latest'
-        ]
+        response = model.generate_content([prompt, uploaded_gemini_file])
         
-        raw_text = None
-        for model_name in models_to_try:
-            try:
-                print(f"Tentative de forçage avec : {model_name}")
-                model = genai.GenerativeModel(model_name)
-                response = model.generate_content([
-                    prompt,
-                    {"mime_type": "application/pdf", "data": pdf_bytes}
-                ])
-                raw_text = response.text
-                print(f"✅ Cible abattue avec : {model_name}")
-                break  # Ça passe, on sort de la boucle
-            except Exception as e:
-                print(f"❌ Échec {model_name} : {e}")
-                continue  # Ça casse, on passe à la balle suivante
-                
-        if not raw_text:
-            raise Exception("L'API Google a rejeté tous les modèles de la liste.")
-            
         # Nettoyage chirurgical du JSON
-        raw_text = raw_text.strip()
+        raw_text = response.text.strip()
         if raw_text.startswith("```json"): raw_text = raw_text.replace("```json", "", 1)
         if raw_text.startswith("```"): raw_text = raw_text.replace("```", "", 1)
         if raw_text.endswith("```"): raw_text = raw_text[:raw_text.rfind("```")]
@@ -69,3 +56,10 @@ async def extract_pdf(file: UploadFile = File(...)):
     except Exception as e:
         print(f"Erreur fatale : {e}")
         raise HTTPException(status_code=500, detail=str(e))
+        
+    finally:
+        # 4. Nettoyage absolu des serveurs (Render et Google)
+        if temp_file_path and os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+        if uploaded_gemini_file:
+            genai.delete_file(uploaded_gemini_file.name)
