@@ -6,7 +6,7 @@ import urllib.error
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="API Agent IA - Pur HTTP Bulldozer", version="23.0")
+app = FastAPI(title="API Agent IA - Pur HTTP Final", version="24.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,32 +26,13 @@ async def extract_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail="Clé API manquante dans Render.")
         
     try:
-        # 1. Préparation du PDF
+        # 1. Lecture du PDF
         pdf_bytes = await file.read()
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
         
-        # 2. Le Radar : On récupère TOUS tes modèles
-        url_models = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-        try:
-            req_models = urllib.request.Request(url_models)
-            with urllib.request.urlopen(req_models) as response:
-                models_data = json.loads(response.read().decode('utf-8'))
-        except urllib.error.HTTPError as e:
-            err_msg = e.read().decode('utf-8')
-            raise Exception(f"Impossible de lister les modèles : {err_msg}")
-            
-        # On filtre pour ne garder que les modèles Gemini capables de lire des documents
-        valid_models = []
-        for m in models_data.get('models', []):
-            methods = m.get('supportedGenerationMethods', [])
-            name = m.get('name', '')
-            if 'generateContent' in methods and 'gemini' in name.lower():
-                valid_models.append(name)
-                
-        if not valid_models:
-            raise Exception("Google ne t'autorise aucun modèle Gemini sur cette clé.")
-            
-        # 3. Le Bulldozer : On les essaye TOUS jusqu'à ce qu'un passe
+        # 2. Le tir de précision (Une seule requête sur le modèle le plus stable)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}"
+        
         payload = {
             "contents": [{
                 "parts": [
@@ -68,34 +49,20 @@ async def extract_pdf(file: UploadFile = File(...)):
             }]
         }
         
-        result = None
-        last_error = ""
-        working_model = ""
+        req = urllib.request.Request(
+            url, 
+            data=json.dumps(payload).encode('utf-8'), 
+            headers={'Content-Type': 'application/json'}
+        )
         
-        for target_model in valid_models:
-            url_generate = f"https://generativelanguage.googleapis.com/v1beta/{target_model}:generateContent?key={api_key}"
-            req = urllib.request.Request(
-                url_generate, 
-                data=json.dumps(payload).encode('utf-8'), 
-                headers={'Content-Type': 'application/json'}
-            )
+        try:
+            with urllib.request.urlopen(req) as response:
+                result = json.loads(response.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            err_msg = e.read().decode('utf-8')
+            raise Exception(f"Erreur Google : {err_msg}")
             
-            try:
-                print(f"Tentative de forçage avec : {target_model}...")
-                with urllib.request.urlopen(req) as response:
-                    result = json.loads(response.read().decode('utf-8'))
-                    working_model = target_model
-                    print(f"✅ BINGO ! La porte a cédé avec {working_model}")
-                    break # ÇA PASSE ! On arrête la boucle et on continue.
-            except urllib.error.HTTPError as e:
-                last_error = e.read().decode('utf-8')
-                print(f"❌ {target_model} a refusé. On passe au suivant.")
-                continue # Ça pète, on essaye le modèle suivant.
-                
-        if not result:
-            raise Exception(f"Google a bloqué TOUS les modèles. Dernière erreur : {last_error}")
-            
-        # 4. Extraction chirurgicale
+        # 3. Extraction chirurgicale
         raw_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
         
         if raw_text.startswith("```json"): raw_text = raw_text.replace("```json", "", 1)
