@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="API Agent IA - CLFinance Batch Ultra-Pro", version="32.0")
+app = FastAPI(title="API Agent IA - CLFinance Enterprise", version="33.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -61,7 +61,6 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # TIMEOUT STRICT DE 30 SECONDES : Empêche le blocage infini du serveur !
             with urllib.request.urlopen(req, timeout=30) as response:
                 result = json.loads(response.read().decode('utf-8'))
                 
@@ -100,3 +99,12 @@ async def extract_batch(files: List[UploadFile] = File(...)):
         
     results = await asyncio.gather(*tasks)
     return {"results": results}
+
+@app.post("/extract-pdf")
+async def extract_pdf_single(file: UploadFile = File(...)):
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="Clé API manquante dans Render.")
+    file_bytes = await file.read()
+    res = process_single_file(file_bytes, file.filename, api_key)
+    return res
