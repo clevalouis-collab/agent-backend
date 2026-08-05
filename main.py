@@ -4,9 +4,9 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import google.generativeai as genai
 
-app = FastAPI(title="API Agent IA - Expert Comptable Vision", version="13.0")
+app = FastAPI(title="API Agent IA - Expert Comptable Vision", version="14.0")
 
-# Configuration CORS pour autoriser ton site Vercel à communiquer avec le serveur
+# Configuration CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,16 +23,14 @@ genai.configure(api_key=GEMINI_API_KEY)
 
 @app.post("/extract-pdf")
 async def extract_pdf(file: UploadFile = File(...)):
-    # Vérification du format
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Seuls les fichiers PDF sont acceptés.")
         
     try:
-        # On lit directement les octets du fichier PDF
         pdf_bytes = await file.read()
         
-        # On utilise le modèle Pro pour contourner l'erreur 404 et avoir la meilleure vision possible
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        # Le nom STRICT du modèle, sans les suffixes capricieux
+        model = genai.GenerativeModel('gemini-1.5-pro')
         
         prompt = """
         Tu es un DAF (Directeur Administratif et Financier) expert.
@@ -50,7 +48,6 @@ async def extract_pdf(file: UploadFile = File(...)):
         }
         """
         
-        # On envoie le PDF brut directement dans la vision de l'IA
         response = model.generate_content([
             prompt,
             {
@@ -59,7 +56,6 @@ async def extract_pdf(file: UploadFile = File(...)):
             }
         ])
         
-        # Nettoyage de la réponse pour s'assurer d'avoir un JSON pur
         raw_text = response.text.strip()
         if raw_text.startswith("```json"):
             raw_text = raw_text.replace("```json", "", 1)
@@ -69,8 +65,6 @@ async def extract_pdf(file: UploadFile = File(...)):
             raw_text = raw_text[:raw_text.rfind("```")]
             
         raw_text = raw_text.strip()
-        
-        # Conversion du texte en vrai dictionnaire Python
         parsed_data = json.loads(raw_text)
         
         return {"data": parsed_data}
