@@ -1,12 +1,15 @@
 import os
 import json
 import base64
+import asyncio
 import urllib.request
 import urllib.error
+from typing import List
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="API Agent IA - CLFinance", version="29.0")
+app = FastAPI(title="API Agent IA - CLFinance Batch", version="30.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,68 +19,74 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.post("/extract-pdf")
-async def extract_pdf(file: UploadFile = File(...)):
-    # Détection auto PDF ou Image
-    filename = file.filename.lower()
-    if filename.endswith(".pdf"):
+# Pool de threads pour exécuter les requêtes IA en parallèle
+executor = ThreadPoolExecutor(max_workers=10)
+
+def process_single_file(file_bytes: bytes, filename: str, api_key: str):
+    filename_lower = filename.lower()
+    if filename_lower.endswith(".pdf"):
         mime_type = "application/pdf"
-    elif filename.endswith((".jpg", ".jpeg")):
+    elif filename_lower.endswith((".jpg", ".jpeg")):
         mime_type = "image/jpeg"
-    elif filename.endswith(".png"):
+    elif filename_lower.endswith(".png"):
         mime_type = "image/png"
     else:
-        raise HTTPException(status_code=400, detail="Format refusé. Envoie un PDF, un JPG ou un PNG.")
+        return {"filename": filename, "error": "Format non supporté"}
+
+    file_base64 = base64.b64encode(file_bytes).decode('utf-8')
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
+    
+    payload = {
+        "contents": [{
+            "parts": [
+                {
+                    "text": "Tu es un DAF de CLFinance. Analyse ce document (facture ou reçu). S'il est de mauvaise qualité, fais de ton mieux. Renvoie UNIQUEMENT un objet JSON valide avec les clés exactes : fournisseur, numero_facture, date_emission, montant_ht, tva, montant_ttc, devise, iban. Si une info est illisible, mets null. Aucun autre texte."
+                },
+                {
+                    "inline_data": {
+                        "mime_type": mime_type,
+                        "data": file_base64
+                    }
+                }
+            ]
+        }]
+    }
+    
+    req = urllib.request.Request(
+        url, 
+        data=json.dumps(payload).encode('utf-8'), 
+        headers={'Content-Type': 'application/json'}
+    )
+    
+    try:
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            
+        raw_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
+        if raw_text.startswith("```json"): raw_text = raw_text.replace("```json", "", 1)
+        if raw_text.startswith("```"): raw_text = raw_text.replace("```", "", 1)
+        if raw_text.endswith("```"): raw_text = raw_text[:raw_text.rfind("```")]
         
+        data_json = json.loads(raw_text.strip())
+        return {"filename": filename, "data": data_json}
+    except Exception as e:
+        return {"filename": filename, "error": str(e)}
+
+@app.post("/extract-batch")
+async def extract_batch(files: List[UploadFile] = File(...)):
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="Clé API manquante dans Render.")
         
-    try:
+    loop = asyncio.get_running_loop()
+    tasks = []
+    
+    for file in files:
         file_bytes = await file.read()
-        file_base64 = base64.b64encode(file_bytes).decode('utf-8')
-        
-        # Tir sur ton super-modèle débloqué
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
-        
-        payload = {
-            "contents": [{
-                "parts": [
-                    {
-                        # C'EST ICI QUE ÇA CHANGE : On a rajouté "devise" dans la liste des clés exactes
-                        "text": "Tu es un DAF de CLFinance. Analyse ce document (facture ou reçu). S'il est de mauvaise qualité, fais de ton mieux. Renvoie UNIQUEMENT un objet JSON valide avec les clés exactes : fournisseur, numero_facture, date_emission, montant_ht, tva, montant_ttc, devise, iban. Si une info est illisible, mets null. Aucun autre texte."
-                    },
-                    {
-                        "inline_data": {
-                            "mime_type": mime_type,
-                            "data": file_base64
-                        }
-                    }
-                ]
-            }]
-        }
-        
-        req = urllib.request.Request(
-            url, 
-            data=json.dumps(payload).encode('utf-8'), 
-            headers={'Content-Type': 'application/json'}
+        # On lance chaque fichier en parallèle dans le pool de threads
+        tasks.append(
+            loop.run_in_executor(executor, process_single_file, file_bytes, file.filename, api_key)
         )
         
-        try:
-            with urllib.request.urlopen(req) as response:
-                result = json.loads(response.read().decode('utf-8'))
-        except urllib.error.HTTPError as e:
-            err_msg = e.read().decode('utf-8')
-            raise Exception(f"Erreur Google : {err_msg}")
-            
-        raw_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
-        
-        if raw_text.startswith("```json"): raw_text = raw_text.replace("```json", "", 1)
-        if raw_text.startswith("```"): raw_text = raw_text.replace("```", "", 1)
-        if raw_text.endswith("```"): raw_text = raw_text[:raw_text.rfind("```")]
-            
-        return {"data": json.loads(raw_text.strip())}
-        
-    except Exception as e:
-        print(f"Erreur fatale : {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    results = await asyncio.gather(*tasks)
+    return {"results": results}
