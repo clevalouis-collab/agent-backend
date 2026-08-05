@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="API Agent IA - CLFinance Enterprise", version="33.0")
+app = FastAPI(title="API Agent IA - CLFinance Enterprise Pro", version="34.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,7 +20,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-executor = ThreadPoolExecutor(max_workers=4)
+executor = ThreadPoolExecutor(max_workers=2) # On baisse à 2 pour un flux propre et sans 429
 
 def process_single_file(file_bytes: bytes, filename: str, api_key: str):
     filename_lower = filename.lower()
@@ -34,13 +34,15 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
         return {"filename": filename, "error": "Format non supporté"}
 
     file_base64 = base64.b64encode(file_bytes).decode('utf-8')
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
+    
+    # Utilisation du modèle flash standard ultra-robuste
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     
     payload = {
         "contents": [{
             "parts": [
                 {
-                    "text": "Tu es un DAF de CLFinance. Analyse ce document (facture ou reçu). S'il est de mauvaise qualité, fais de ton mieux. Renvoie UNIQUEMENT un objet JSON valide avec les clés exactes : fournisseur, numero_facture, date_emission, montant_ht, tva, montant_ttc, devise, iban. Si une info est illisible, mets null. Aucun autre texte."
+                    "text": "Tu es un DAF de CLFinance. Analyse ce document (facture ou reçu). Renvoie UNIQUEMENT un objet JSON valide avec les clés exactes : fournisseur, numero_facture, date_emission, montant_ht, tva, montant_ttc, devise, iban. Si une info est illisible, mets null. Aucun autre texte."
                 },
                 {
                     "inline_data": {
@@ -58,7 +60,7 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
         headers={'Content-Type': 'application/json'}
     )
     
-    max_retries = 3
+    max_retries = 4
     for attempt in range(max_retries):
         try:
             with urllib.request.urlopen(req, timeout=30) as response:
@@ -73,7 +75,7 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
             return {"filename": filename, "data": data_json}
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < max_retries - 1:
-                time.sleep(2 * (attempt + 1))
+                time.sleep(3 * (attempt + 1)) # Pause progressive anti-surcharge
                 continue
             return {"filename": filename, "error": f"Erreur HTTP {e.code}"}
         except Exception as e:
@@ -88,16 +90,14 @@ async def extract_batch(files: List[UploadFile] = File(...)):
     if not api_key:
         raise HTTPException(status_code=500, detail="Clé API manquante dans Render.")
         
-    loop = asyncio.get_running_loop()
-    tasks = []
-    
+    results = []
+    # Traitement séquentiel ou semi-parallèle doux pour éliminer définitivement les 429
     for file in files:
         file_bytes = await file.read()
-        tasks.append(
-            loop.run_in_executor(executor, process_single_file, file_bytes, file.filename, api_key)
-        )
+        res = process_single_file(file_bytes, file.filename, api_key)
+        results.append(res)
+        time.sleep(1) # Petite pause de courtoisie d'une seconde entre chaque facture
         
-    results = await asyncio.gather(*tasks)
     return {"results": results}
 
 @app.post("/extract-pdf")
