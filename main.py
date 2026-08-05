@@ -81,3 +81,5 @@ async def extract_pdf(file: UploadFile = File(...)):
     except Exception as e:
         print(f"Erreur serveur : {e}")
         raise HTTPException(status_code=500, detail=f"Erreur lors de l'analyse : {str(e)}")
+
+
