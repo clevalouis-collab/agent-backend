@@ -9,7 +9,7 @@ from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="API Agent IA - CLFinance Production Finale", version="42.0")
+app = FastAPI(title="API Agent IA - CLFinance The Original 3.6", version="43.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,8 +32,8 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
 
     file_base64 = base64.b64encode(file_bytes).decode('utf-8')
     
-    # URL mise à jour avec le modèle standard supporté par l'API Google
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    # RETOUR AU MODÈLE INITIAL DE PREMIER CHOIX : gemini-3.6-flash
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
     
     payload = {
         "contents": [{
@@ -57,7 +57,7 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
         headers={'Content-Type': 'application/json'}
     )
     
-    max_retries = 3
+    max_retries = 4
     for attempt in range(max_retries):
         try:
             with urllib.request.urlopen(req, timeout=30) as response:
@@ -72,12 +72,10 @@ def process_single_file(file_bytes: bytes, filename: str, api_key: str):
             return {"filename": filename, "data": data_json}
             
         except urllib.error.HTTPError as e:
-            # On récupère le message d'erreur précis renvoyé par Google si besoin
-            error_message = e.read().decode('utf-8') if e.fp else str(e)
             if e.code == 429 and attempt < max_retries - 1:
-                time.sleep(3 * (attempt + 1))
+                time.sleep(3 * (attempt + 1)) # Pause progressive si le quota tousse
                 continue
-            return {"filename": filename, "error": f"Google API Error {e.code}"}
+            return {"filename": filename, "error": f"Erreur HTTP {e.code}"}
         except Exception as e:
             if attempt < max_retries - 1:
                 time.sleep(2)
@@ -95,7 +93,7 @@ async def extract_batch(files: List[UploadFile] = File(...)):
         file_bytes = await file.read()
         res = process_single_file(file_bytes, file.filename, api_key)
         results.append(res)
-        await asyncio.sleep(1.2)
+        await asyncio.sleep(1.5) # Espacement parfait pour ne pas saturer
         
     return {"results": results}
 
