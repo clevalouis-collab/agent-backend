@@ -38,7 +38,8 @@ async def extract_pdf(file: UploadFile = File(...)):
         if mime_type == "image/jpg": 
             mime_type = "image/jpeg"
             
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        # CORRECTION ICI : Ajout de "-latest"
+        model = genai.GenerativeModel("gemini-1.5-flash-latest")
         prompt = """
         Analyse cette facture et renvoie uniquement un JSON strict avec ces clés:
         fournisseur, numero_facture, date_emission (YYYY-MM-DD), montant_ht (float), tva (float), montant_ttc (float), devise, iban, category.
@@ -61,7 +62,6 @@ async def inbound_email_webhook(request: Request):
     try:
         payload = await request.json()
         
-        # Vérification du signal
         if payload.get("type") != "email.received":
             return {"status": "ignored"}
             
@@ -69,17 +69,14 @@ async def inbound_email_webhook(request: Request):
         email_id = data.get("email_id")
         sender_email = data.get("from", "")
         
-        # Déduire le nom du client
         client_name = sender_email.split("@")[0].capitalize() if "@" in sender_email else "Client Email"
 
-        # Récupérer les pièces jointes
         attachments_response = resend.Emails.Receiving.Attachments.list(email_id=email_id)
         attachments = getattr(attachments_response, "data", [])
 
         if not attachments:
             return {"status": "no_attachments"}
 
-        # Traiter les pièces jointes
         for att in attachments:
             file_name = att.get("filename", "facture.pdf")
             download_url = att.get("download_url")
@@ -87,12 +84,10 @@ async def inbound_email_webhook(request: Request):
             if not download_url:
                 continue
 
-            # Télécharger le fichier
             async with httpx.AsyncClient() as client:
                 file_resp = await client.get(download_url)
                 file_bytes = file_resp.content
 
-            # Détection auto du format depuis l'extension de l'email
             mime_type = "application/pdf"
             lower_name = file_name.lower()
             if lower_name.endswith(".jpeg") or lower_name.endswith(".jpg"):
@@ -100,8 +95,8 @@ async def inbound_email_webhook(request: Request):
             elif lower_name.endswith(".png"):
                 mime_type = "image/png"
 
-            # IA
-            model = genai.GenerativeModel("gemini-1.5-flash")
+            # CORRECTION ICI : Ajout de "-latest"
+            model = genai.GenerativeModel("gemini-1.5-flash-latest")
             prompt = """
             Analyse cette facture et renvoie uniquement un JSON strict avec ces clés:
             fournisseur, numero_facture, date_emission (YYYY-MM-DD), montant_ht (float), tva (float), montant_ttc (float), devise, iban, category.
@@ -113,7 +108,6 @@ async def inbound_email_webhook(request: Request):
             text_res = response.text.replace("```json", "").replace("```", "").strip()
             parsed_data = json.loads(text_res)
 
-            # Sauvegarde base de données
             new_invoice = {
                 "user_id": "SYSTEM_EMAIL_INGESTION",
                 "filename": file_name,
