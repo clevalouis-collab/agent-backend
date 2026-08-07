@@ -1,100 +1,109 @@
 import os
-import json
-import asyncio
-from typing import List, Optional
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from google import genai
-from google.genai import types
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, Request, HTTPException
+from pydantic import BaseModel
+from typing import Optional
+import resend
+from supabase import create_client
+import httpx
+import google.generativeai as genai
 
-app = FastAPI(title="API Agent IA - CLFinance Enterprise Ultimate", version="60.0")
+app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+resend.api_key = os.environ.get("RESEND_API_KEY")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://gfzgpsmazicmpzykwsht.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "sb_publishable_EC1AjbMq9Uy-EbBA845sZg_4MkqlhzC")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Schéma Pydantic strict pour garantir des types parfaits et zéro hallucination de clés
-class FactureExtraction(BaseModel):
-    fournisseur: Optional[str] = Field(default=None, description="Nom du fournisseur ou de l'entreprise émettrice")
-    numero_facture: Optional[str] = Field(default=None, description="Numéro de la facture ou du reçu")
-    date_emission: Optional[str] = Field(default=None, description="Date d'émission au format YYYY-MM-DD ou clair")
-    montant_ht: Optional[float] = Field(default=None, description="Montant total Hors Taxes en nombre décimal")
-    tva: Optional[float] = Field(default=None, description="Montant total de la TVA en nombre décimal")
-    montant_ttc: Optional[float] = Field(default=None, description="Montant total TTC en nombre décimal")
-    devise: Optional[str] = Field(default="EUR", description="Devise (EUR, CHF, USD...)")
-    iban: Optional[str] = Field(default=None, description="IBAN bancaire du fournisseur")
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-def process_single_file(file_bytes: bytes, filename: str, api_key: str):
-    filename_lower = filename.lower()
-    if filename_lower.endswith(".pdf"):
-        mime_type = "application/pdf"
-    elif filename_lower.endswith((".jpg", ".jpeg")):
-        mime_type = "image/jpeg"
-    elif filename_lower.endswith(".png"):
-        mime_type = "image/png"
-    else:
-        return {"filename": filename, "error": "Format non supporté (PDF, JPG, PNG)"}
+class InvoiceData(BaseModel):
+    fournisseur: Optional[str] = None
+    numero_facture: Optional[str] = None
+    date_emission: Optional[str] = None
+    montant_ht: Optional[float] = None
+    tva: Optional[float] = None
+    montant_ttc: Optional[float] = None
+    devise: Optional[str] = "EUR"
+    iban: Optional[str] = None
+    category: Optional[str] = "Frais généraux"
 
+@app.post("/webhook/email")
+async def inbound_email_webhook(request: Request):
+    """
+    Reçoit les e-mails entrants de Resend, extrait la facture et l'insère dans Supabase.
+    """
     try:
-        client = genai.Client(api_key=api_key)
+        payload = await request.json()
         
-        prompt = (
-            "Tu es un DAF expert de CLFinance. Analyse minutieusement ce document comptable (facture, reçu ou note de frais, multi-pages inclus). "
-            "Extrais rigoureusement les informations demandées."
-        )
+        # On vérifie qu'il s'agit bien d'un e-mail reçu
+        if payload.get("type") != "email.received":
+            return {"status": "ignored"}
+            
+        data = payload.get("data", {})
+        email_id = data.get("email_id")
+        sender_email = data.get("from", "")
         
-        doc_part = types.Part.from_bytes(
-            data=file_bytes,
-            mime_type=mime_type,
-        )
-        
-        # Appel avec Structured Outputs stricts
-        response = client.models.generate_content(
-            model='gemini-3.6-flash',
-            contents=[prompt, doc_part],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=FactureExtraction,
-                temperature=0.0
-            ),
-        )
-        
-        data_json = json.loads(response.text)
-        return {"filename": filename, "data": data_json}
-        
+        # Déduire le nom du client depuis l'expéditeur (ou utiliser l'adresse e-mail brute)
+        client_name = sender_email.split("@")[0].capitalize() if "@" in sender_email else "Client Email"
+
+        # 1. Récupérer les pièces jointes de l'e-mail via l'API Resend
+        attachments_response = resend.Emails.Receiving.Attachments.list(email_id=email_id)
+        attachments = getattr(attachments_response, "data", [])
+
+        if not attachments:
+            return {"status": "no_attachments"}
+
+        # 2. Traiter la première pièce jointe (PDF ou Image)
+        for att in attachments:
+            file_name = att.get("filename", "facture.pdf")
+            download_url = att.get("download_url")
+            
+            if not download_url:
+                continue
+
+            # Télécharger le fichier
+            async with httpx.AsyncClient() as client:
+                file_resp = await client.get(download_url)
+                file_bytes = file_resp.content
+
+            # 3. Envoyer à Gemini pour extraction
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            prompt = """
+            Analyse cette facture et renvoie un JSON strict avec ces clés:
+            fournisseur, numero_facture, date_emission (YYYY-MM-DD), montant_ht (float), tva (float), montant_ttc (float), devise, iban, category.
+            """
+            
+            # Appel Gemini avec les octets du fichier
+            response = model.generate_content([
+                {'mime_type': 'application/pdf', 'data': file_bytes},
+                prompt
+            ])
+            
+            # Nettoyage et parsing du JSON renvoyé par l'IA
+            text_res = response.text.replace("```json", "").replace("```", "").strip()
+            import json
+            parsed_data = json.loads(text_res)
+
+            # 4. Sauvegarde automatique dans Supabase
+            new_invoice = {
+                "user_id": "SYSTEM_EMAIL_INGESTION", # Ou ID utilisateur lié si stocké en dur
+                "filename": file_name,
+                "client_name": client_name,
+                "fournisseur": parsed_data.get("fournisseur"),
+                "numero_facture": parsed_data.get("numero_facture"),
+                "date_emission": parsed_data.get("date_emission"),
+                "montant_ht": parsed_data.get("montant_ht"),
+                "tva": parsed_data.get("tva"),
+                "montant_ttc": parsed_data.get("montant_ttc"),
+                "devise": parsed_data.get("devise", "EUR"),
+                "iban": parsed_data.get("iban"),
+                "category": parsed_data.get("category", "Frais généraux"),
+            }
+            
+            supabase.from("invoices").insert([new_invoice]).execute()
+
+        return {"status": "success", "processed_emails": 1}
+
     except Exception as e:
-        return {"filename": filename, "error": str(e)}
-
-@app.post("/extract-batch")
-async def extract_batch(files: List[UploadFile] = File(...)):
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="Clé API manquante dans Render.")
-        
-    results = []
-    for file in files:
-        file_bytes = await file.read()
-        res = process_single_file(file_bytes, file.filename, api_key)
-        results.append(res)
-        await asyncio.sleep(0.5)
-        
-    return {"results": results}
-
-@app.post("/extract-pdf")
-async def extract_pdf_single(file: UploadFile = File(...)):
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="Clé API manquante dans Render.")
-    file_bytes = await file.read()
-    res = process_single_file(file_bytes, file.filename, api_key)
-    return res
-
-@app.post("/sync-erp")
-async def sync_erp(payload: dict):
-    # Endpoint prêt pour connecter Sage, QuickBooks ou un Webhook tiers
-    return {"status": "success", "message": "Lot injecté avec succès dans l'ERP."}
+        print(f"Erreur Webhook Email: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
