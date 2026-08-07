@@ -123,3 +123,4 @@ async def inbound_email_webhook(request: Request):
     except Exception as e:
         print(f"Erreur Webhook: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+        
