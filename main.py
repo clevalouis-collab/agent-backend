@@ -32,13 +32,19 @@ genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 async def extract_pdf(file: UploadFile = File(...)):
     try:
         content = await file.read()
+        
+        # Détection automatique du type de fichier (PDF ou Image)
+        mime_type = file.content_type if file.content_type else "application/pdf"
+        if mime_type == "image/jpg": 
+            mime_type = "image/jpeg"
+            
         model = genai.GenerativeModel("gemini-1.5-flash")
         prompt = """
         Analyse cette facture et renvoie uniquement un JSON strict avec ces clés:
         fournisseur, numero_facture, date_emission (YYYY-MM-DD), montant_ht (float), tva (float), montant_ttc (float), devise, iban, category.
         """
         response = model.generate_content([
-            {'mime_type': 'application/pdf', 'data': content},
+            {'mime_type': mime_type, 'data': content},
             prompt
         ])
         text_res = response.text.replace("```json", "").replace("```", "").strip()
@@ -81,10 +87,18 @@ async def inbound_email_webhook(request: Request):
             if not download_url:
                 continue
 
-            # Télécharger le PDF
+            # Télécharger le fichier
             async with httpx.AsyncClient() as client:
                 file_resp = await client.get(download_url)
                 file_bytes = file_resp.content
+
+            # Détection auto du format depuis l'extension de l'email
+            mime_type = "application/pdf"
+            lower_name = file_name.lower()
+            if lower_name.endswith(".jpeg") or lower_name.endswith(".jpg"):
+                mime_type = "image/jpeg"
+            elif lower_name.endswith(".png"):
+                mime_type = "image/png"
 
             # IA
             model = genai.GenerativeModel("gemini-1.5-flash")
@@ -93,7 +107,7 @@ async def inbound_email_webhook(request: Request):
             fournisseur, numero_facture, date_emission (YYYY-MM-DD), montant_ht (float), tva (float), montant_ttc (float), devise, iban, category.
             """
             response = model.generate_content([
-                {'mime_type': 'application/pdf', 'data': file_bytes},
+                {'mime_type': mime_type, 'data': file_bytes},
                 prompt
             ])
             text_res = response.text.replace("```json", "").replace("```", "").strip()
@@ -115,7 +129,6 @@ async def inbound_email_webhook(request: Request):
                 "category": parsed_data.get("category", "Frais généraux")
             }
             
-            # LA CORRECTION EST ICI : .table() au lieu de .from()
             supabase.table("invoices").insert([new_invoice]).execute()
 
         return {"status": "success"}
@@ -123,4 +136,3 @@ async def inbound_email_webhook(request: Request):
     except Exception as e:
         print(f"Erreur Webhook: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-        
