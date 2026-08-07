@@ -6,3 +6,4 @@ supabase
 google-generativeai
 resend
 httpx
+
