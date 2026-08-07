@@ -114,7 +114,9 @@ async def inbound_email_webhook(request: Request):
                 "iban": parsed_data.get("iban"),
                 "category": parsed_data.get("category", "Frais généraux")
             }
-            supabase.from("invoices").insert([new_invoice]).execute()
+            
+            # LA CORRECTION EST ICI : .table() au lieu de .from()
+            supabase.table("invoices").insert([new_invoice]).execute()
 
         return {"status": "success"}
 
